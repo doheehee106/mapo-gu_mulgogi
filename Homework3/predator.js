@@ -106,7 +106,11 @@ class Predator {
   display() {
     push();
     translate(this.x, this.y);
-    scale(this.facing, 1);
+    if (this.state === "falling") {
+      rotate(HALF_PI); // 머리를 아래로 향하게 함
+    } else {
+      scale(this.facing, 1); // 물속에서는 좌우 방향만 바꿈
+    }
 
     // 꼬리지느러미
     fill("#465143");
@@ -161,7 +165,7 @@ class Predator {
 
     // 눈
     fill("#171914");
-    circle(this.size * 0.42, -this.size * 0.25, this.size * 0.12);
+    circle(this.size * 0.42, -this.size * 0.25, this.size * 0.17);
 
     pop();
   }

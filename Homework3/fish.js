@@ -21,24 +21,39 @@ class Fish {
       let dy = this.y - this.chasedBy.y;
       let distance = Math.sqrt(dx * dx + dy * dy);
 
-      if (distance > 0) {
-        this.x += (dx / distance) * this.escapeSpeed;
-        this.y += (dy / distance) * this.escapeSpeed;
+      if (distance === 0) {
+        dx = 1;
+        distance = 1;
       }
 
-      // 물고기 방향을 좌우로 맞춤
-      this.speed = dx >= 0 ? this.escapeSpeed : -this.escapeSpeed;
+      let moveX = (dx / distance) * this.escapeSpeed;
+      let moveY = (dy / distance) * this.escapeSpeed;
 
-      // 물고기가 물 영역 밖으로 나가지 않게 제한
       let leftEdge = this.size * 1.5;
       let rightEdge = width - this.size * 1.5;
       let topEdge = height * 0.4 + 48 + this.size;
       let bottomEdge = height - this.size;
 
-      if (this.x < leftEdge) this.x = leftEdge;
-      if (this.x > rightEdge) this.x = rightEdge;
-      if (this.y < topEdge) this.y = topEdge;
-      if (this.y > bottomEdge) this.y = bottomEdge;
+      // 가로 벽에 막히면 벽을 따라 위나 아래로 도망감
+      if (this.x + moveX < leftEdge || this.x + moveX > rightEdge) {
+        moveX = 0;
+        moveY =
+          this.y <= this.chasedBy.y ? -this.escapeSpeed : this.escapeSpeed;
+      }
+
+      // 위아래 경계에 닿으려 하면 안쪽으로 방향을 바꿈
+      if (this.y + moveY < topEdge) {
+        moveY = this.escapeSpeed;
+      } else if (this.y + moveY > bottomEdge) {
+        moveY = -this.escapeSpeed;
+      }
+
+      this.x += moveX;
+      this.y += moveY;
+
+      if (Math.abs(moveX) > 0.1) {
+        this.speed = moveX > 0 ? Math.abs(this.speed) : -Math.abs(this.speed);
+      }
 
       return;
     }
