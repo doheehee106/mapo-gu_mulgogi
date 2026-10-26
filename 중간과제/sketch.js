@@ -819,34 +819,52 @@ function drawFarmClouds(opacity, tint) {
     ctx.beginPath();
     ctx.moveTo(cloud.x - cloud.w * 0.48, y + cloud.h * 0.12);
     ctx.bezierCurveTo(
-      cloud.x - cloud.w * 0.57, y - cloud.h * 0.04,
-      cloud.x - cloud.w * 0.43, y - cloud.h * 0.34,
-      cloud.x - cloud.w * 0.22, y - cloud.h * 0.27,
+      cloud.x - cloud.w * 0.57,
+      y - cloud.h * 0.04,
+      cloud.x - cloud.w * 0.43,
+      y - cloud.h * 0.34,
+      cloud.x - cloud.w * 0.22,
+      y - cloud.h * 0.27,
     );
     ctx.bezierCurveTo(
-      cloud.x - cloud.w * 0.16, y - cloud.h * 0.59,
-      cloud.x + cloud.w * 0.15, y - cloud.h * 0.55,
-      cloud.x + cloud.w * 0.20, y - cloud.h * 0.27,
+      cloud.x - cloud.w * 0.16,
+      y - cloud.h * 0.59,
+      cloud.x + cloud.w * 0.15,
+      y - cloud.h * 0.55,
+      cloud.x + cloud.w * 0.2,
+      y - cloud.h * 0.27,
     );
     ctx.bezierCurveTo(
-      cloud.x + cloud.w * 0.39, y - cloud.h * 0.42,
-      cloud.x + cloud.w * 0.55, y - cloud.h * 0.20,
-      cloud.x + cloud.w * 0.45, y - cloud.h * 0.02,
+      cloud.x + cloud.w * 0.39,
+      y - cloud.h * 0.42,
+      cloud.x + cloud.w * 0.55,
+      y - cloud.h * 0.2,
+      cloud.x + cloud.w * 0.45,
+      y - cloud.h * 0.02,
     );
     ctx.bezierCurveTo(
-      cloud.x + cloud.w * 0.57, y + cloud.h * 0.03,
-      cloud.x + cloud.w * 0.48, y + cloud.h * 0.24,
-      cloud.x + cloud.w * 0.30, y + cloud.h * 0.22,
+      cloud.x + cloud.w * 0.57,
+      y + cloud.h * 0.03,
+      cloud.x + cloud.w * 0.48,
+      y + cloud.h * 0.24,
+      cloud.x + cloud.w * 0.3,
+      y + cloud.h * 0.22,
     );
     ctx.bezierCurveTo(
-      cloud.x + cloud.w * 0.12, y + cloud.h * 0.36,
-      cloud.x - cloud.w * 0.17, y + cloud.h * 0.31,
-      cloud.x - cloud.w * 0.27, y + cloud.h * 0.21,
+      cloud.x + cloud.w * 0.12,
+      y + cloud.h * 0.36,
+      cloud.x - cloud.w * 0.17,
+      y + cloud.h * 0.31,
+      cloud.x - cloud.w * 0.27,
+      y + cloud.h * 0.21,
     );
     ctx.bezierCurveTo(
-      cloud.x - cloud.w * 0.43, y + cloud.h * 0.28,
-      cloud.x - cloud.w * 0.55, y + cloud.h * 0.23,
-      cloud.x - cloud.w * 0.48, y + cloud.h * 0.12,
+      cloud.x - cloud.w * 0.43,
+      y + cloud.h * 0.28,
+      cloud.x - cloud.w * 0.55,
+      y + cloud.h * 0.23,
+      cloud.x - cloud.w * 0.48,
+      y + cloud.h * 0.12,
     );
     ctx.closePath();
 
@@ -1206,16 +1224,8 @@ function drawEgg(x, y, eggW, eggH, note, eggNumber) {
   if (note.favorite) {
     const starSize = max(7, numberFontSize * 0.82);
     const starOffset = textWidth(numberLabel) / 2 + starSize * 0.62;
-    drawFavoriteStar(
-      -starOffset,
-      numberY,
-      starSize,
-    );
-    drawFavoriteStar(
-      starOffset,
-      numberY,
-      starSize,
-    );
+    drawFavoriteStar(-starOffset, numberY, starSize);
+    drawFavoriteStar(starOffset, numberY, starSize);
   }
 
   // 부화 중인 알에 금 그리기
@@ -1374,7 +1384,9 @@ function drawChick(chick) {
   // 밤에는 좌우 이동뿐 아니라 위아래 흔들림도 함께 천천히, 작게 줄입니다.
   const bob =
     sin(millis() * 0.008 * movementRate + chick.phase) *
-    s * 0.025 * movementRate;
+    s *
+    0.025 *
+    movementRate;
   const ageMs = chick.ageElapsed || 0;
   const hasComb = ageMs >= 90 * 1000;
   const isChicken = ageMs >= 150 * 1000;
@@ -1437,16 +1449,8 @@ function drawChick(chick) {
   if (chick.memo && chick.memo.favorite) {
     const starSize = max(8, numberFontSize * 0.82);
     const starOffset = textWidth(numberLabel) / 2 + starSize * 0.62;
-    drawFavoriteStar(
-      numberX - starOffset,
-      numberY,
-      starSize,
-    );
-    drawFavoriteStar(
-      numberX + starOffset,
-      numberY,
-      starSize,
-    );
+    drawFavoriteStar(numberX - starOffset, numberY, starSize);
+    drawFavoriteStar(numberX + starOffset, numberY, starSize);
   }
   pop();
 }
