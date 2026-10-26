@@ -23,11 +23,34 @@ let gateOpenedAt = 0;
 let pendingNote = null;
 let pendingTargetId = null;
 let refillAt = 0;
+let timeOfDay = 0; // 0 = 낮, 0.5 = 해질녘, 1 = 밤
+let timeSliderDragging = false;
+let skyTimeDragging = false;
+let skyDragStartY = 0;
+let skyDragStartTime = 0;
+let lastSimulationSaveAt = 0;
+let titleScreenActive = true;
+let titleTransitionStartedAt = null;
+let chickImage;
+let middleChickenImage;
+let adultChickenImage;
+let farmClouds = [];
+let roosterAudioContext = null;
+let roosterAudioBuffer = null;
+let roosterAudioLoading = false;
+let roosterAudioUnlocked = false;
+let roosterSourceNode = null;
+let backgroundMusic = null;
+let backgroundMusicStarted = false;
+let backgroundMusicStarting = false;
+let roosterCallTimerStarted = false;
+let lastRoosterCallAt = 0;
 
 const STORE_KEY = "farmEggNotes_v1";
 const CHICK_STORE_KEY = "farmEggChicks_v1";
 const CHICK_ZONE_MOVE_MIGRATION_KEY = "farmEggChickZoneMovedDown_v1";
 const EGG_NUMBER_KEY = "farmEggNextNumber_v1";
+const TIME_OF_DAY_KEY = "farmTimeOfDay_v1";
 const SLOT_COUNT = 10;
 const BASE_HEIGHT = 576;
 const EXTRA_BOTTOM = 120; // 아래 초록색을 늘릴 픽셀 수
@@ -35,46 +58,254 @@ const NOTE_LIFE = 5 * 60 * 1000;
 //잠깐 멈춰두려고 밑에거 추가하고 위에꺼 꺼둠
 //const NOTE_LIFE = Infinity;
 const HATCH_TIME = 2400;
+const TITLE_TRANSITION_MS = 1500;
+
+function loadFarmAssets() {
+  // 이 프로젝트는 p5.js 2.x를 사용하므로 preload() 대신 setup()에서 비동기로 읽습니다.
+  chickImage = loadImage(
+    "./chick-sprite.png",
+    (img) => {
+      chickImage = img;
+      console.log("사용자 병아리 이미지 로드 완료", img.width, img.height);
+    },
+    (error) => console.error("사용자 병아리 이미지 로드 실패: ./chick-sprite.png", error),
+  );
+  middleChickenImage = loadImage(
+    "./middle-chicken-sprite.png",
+    (img) => {
+      middleChickenImage = img;
+      console.log("사용자 중닭 이미지 로드 완료", img.width, img.height);
+    },
+    (error) => console.error("사용자 중닭 이미지 로드 실패: ./middle-chicken-sprite.png", error),
+  );
+  adultChickenImage = loadImage(
+    "./adult-chicken-sprite.png",
+    (img) => {
+      adultChickenImage = img;
+      console.log("사용자 성체 닭 이미지 로드 완료", img.width, img.height);
+    },
+    (error) => console.error("사용자 성체 닭 이미지 로드 실패: ./adult-chicken-sprite.png", error),
+  );
+
+  const farmTitleFace = new FontFace(
+    "FarmTitleFont",
+    'url("./title-font.ttf")',
+  );
+  document.fonts.add(farmTitleFace);
+  farmTitleFace
+    .load()
+    .then(() => {
+      console.log("뚝딱감자체 타이틀 폰트를 불러왔습니다.");
+    })
+    .catch((error) => console.error("타이틀 폰트 로드 실패:", error));
+
+  const memoFont = new FontFace("MemoFont", 'url("./memo-font.ttf")');
+  document.fonts.add(memoFont);
+  memoFont
+    .load()
+    .then(() => {
+      console.log("이서윤체 메모 폰트를 불러왔습니다.");
+    })
+    .catch((error) => console.error("이서윤체 메모 폰트 로드 실패:", error));
+
+  const farmUIFont = new FontFace("FarmUIFont", 'url("./ui-font.ttf")');
+  document.fonts.add(farmUIFont);
+  farmUIFont
+    .load()
+    .then(() => {
+      console.log("조선센테니얼 안내 폰트를 불러왔습니다.");
+    })
+    .catch((error) => console.error("조선센테니얼 폰트 로드 실패:", error));
+}
 
 function setup() {
+  // 논리 캔버스 크기(1024 × 696)는 그대로 두고, 브라우저 확대 시 흐려지지 않도록
+  // 실제 그리는 픽셀 수를 3배로 설정합니다.
+  pixelDensity(3);
   createCanvas(1024, BASE_HEIGHT + EXTRA_BOTTOM);
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  loadFarmAssets();
+  initializeFarmClouds();
   rectMode(CORNER);
   ellipseMode(CENTER);
-  textFont("sans-serif");
+  textFont("FarmUIFont");
 
+  timeOfDay = constrain(Number(localStorage.getItem(TIME_OF_DAY_KEY)) || 0, 0, 1);
+  // 첫 터치/클릭 안에서 AudioContext를 시작해야 iPad Safari에서도 재생됩니다.
+  document.addEventListener("pointerdown", unlockFarmAudio, { once: true });
+  document.addEventListener("touchstart", unlockFarmAudio, {
+    once: true,
+    passive: true,
+  });
   loadNotes();
   loadChicks();
   initializeEggNumbers();
   buildUI();
   positionUI();
+  setFarmUIVisible(false);
 }
 
 function draw() {
-  background("#8ed8f2");
+  const rawDt = min(deltaTime, 40) / 1000;
+  updateFarmClouds(rawDt);
+  const waitingAtTitle = titleScreenActive && titleTransitionStartedAt === null;
+  let transitionProgress = 0;
 
+  if (titleTransitionStartedAt !== null) {
+    transitionProgress = constrain(
+      (millis() - titleTransitionStartedAt) / TITLE_TRANSITION_MS,
+      0,
+      1,
+    );
+    if (transitionProgress >= 1) {
+      titleScreenActive = false;
+      titleTransitionStartedAt = null;
+      setFarmUIVisible(true);
+    }
+  }
+
+  const easedProgress =
+    transitionProgress < 0.5
+      ? 4 * transitionProgress * transitionProgress * transitionProgress
+      : 1 - Math.pow(-2 * transitionProgress + 2, 3) / 2;
+  const dt = waitingAtTitle ? 0 : rawDt;
+
+  // 농장 장면은 제자리에 두고, 타이틀만 위로 빠지며 농장을 드러냅니다.
+  push();
   drawSky();
   drawField();
   drawFence();
-  drawChicks();
+  drawChicks(dt);
   drawDeskAndCarton();
   drawChicksInFrontOfLegBottoms();
-  updateNotes();
+
+  if (!waitingAtTitle) {
+    updateNotes(dt);
+    updateRoosterCalls();
+  }
 
   const chickIsLeaving = chicks.some((chick) => chick.leaving);
+
+  // 문을 연 뒤 1.7초 동안 병아리를 고르지 않으면 자동으로 닫습니다.
   if (
+    !waitingAtTitle &&
+    gateOpen &&
+    gateExitMode &&
+    !chickIsLeaving &&
+    millis() - gateOpenedAt >= 1700
+  ) {
+    gateOpen = false;
+    gateExitMode = false;
+  }
+
+  if (
+    !waitingAtTitle &&
     gateOpen &&
     !gateExitMode &&
     !chickIsLeaving &&
-    millis() - gateOpenedAt >= 500
+    millis() - gateOpenedAt >= 300
   ) {
     gateOpen = false;
   }
 
+  drawTimeOfDayTint();
+  drawTimeOfDaySlider();
+  pop();
+
+  if (titleScreenActive) {
+    drawTitleScreen(easedProgress);
+  }
+
+  if (!waitingAtTitle && millis() - lastSimulationSaveAt >= 1000) {
+    saveNotes();
+    saveChicks();
+    lastSimulationSaveAt = millis();
+  }
+}
+
+function setFarmUIVisible(visible) {
+  const display = visible ? "block" : "none";
+  if (addButton) addButton.elt.style.display = display;
+  if (clearChicksButton) clearChicksButton.elt.style.display = display;
+  if (resetFarmButton) resetFarmButton.elt.style.display = display;
+}
+
+function titleStartButtonBounds() {
+  return {
+    x: width / 2 - 130,
+    y: height * 0.72 - 34,
+    w: 260,
+    h: 68,
+  };
+}
+
+function drawTitleScreen(progress) {
+  push();
+  if (progress > 0) translate(0, -height * progress);
+  drawingContext.globalAlpha = 1 - progress;
+
+  // 파란 하늘 그라데이션
+  const ctx = drawingContext;
+  const sky = ctx.createLinearGradient(0, 0, 0, height);
+  sky.addColorStop(0, "#58b8e8");
+  sky.addColorStop(0.55, "#9bdcf2");
+  sky.addColorStop(1, "#e2f4f6");
   noStroke();
-  fill("#fff8e8");
-  textAlign(CENTER, CENTER);
-  textSize(14);
-  text("", width * 0.28, BASE_HEIGHT * 0.84);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, width, height);
+
+  // 부드러운 겹구름 장식
+  drawFarmClouds(165, color("#f8fdff"));
+
+  // 나무 판과 나뭇결
+  const boardX = width * 0.16;
+  const boardY = height * 0.32;
+  const boardW = width * 0.68;
+  const boardH = height * 0.27;
+  drawingContext.shadowColor = "rgba(47, 52, 54, 0.32)";
+  drawingContext.shadowBlur = 18;
+  drawingContext.shadowOffsetY = 10;
+  fill("#70442f");
+  rect(boardX, boardY, boardW, boardH, 22);
+  drawingContext.shadowColor = "transparent";
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetY = 0;
+  fill("#9a6139");
+  rect(boardX + 10, boardY + 10, boardW - 20, boardH - 20, 16);
+  fill("#ad7446");
+  rect(boardX + 18, boardY + 18, boardW - 36, boardH - 36, 12);
+  stroke("#c48a57");
+  strokeWeight(2);
+  line(boardX + 34, boardY + boardH * 0.28, boardX + boardW - 34, boardY + boardH * 0.28);
+  line(boardX + 34, boardY + boardH * 0.73, boardX + boardW - 34, boardY + boardH * 0.73);
+  noStroke();
+
+  drawTitleText("농장 비밀 노트", width / 2, boardY + boardH / 2, 48, "#fff0cf");
+
+  const button = titleStartButtonBounds();
+  fill("rgba(52, 83, 91, 0.18)");
+  rect(button.x, button.y + 7, button.w, button.h, 18);
+  fill("#805137");
+  rect(button.x, button.y, button.w, button.h, 18);
+  stroke("#f3d39b");
+  strokeWeight(3);
+  noFill();
+  rect(button.x + 3, button.y + 3, button.w - 6, button.h - 6, 15);
+  noStroke();
+  drawTitleText("시작하기", width / 2, button.y + button.h / 2, 25, "#fff5dc");
+  pop();
+}
+
+function drawTitleText(label, x, y, size, colorValue) {
+  const ctx = drawingContext;
+  ctx.save();
+  ctx.font = `${size}px "FarmTitleFont", sans-serif`;
+  ctx.fillStyle = colorValue;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x, y);
+  ctx.restore();
 }
 
 function loadNotes() {
@@ -90,8 +321,16 @@ function loadNotes() {
           number: Number(note.number) || 0,
           body: String(note.body || ""),
           created: Number(note.created) || Date.now(),
+          lifeElapsed: Number.isFinite(Number(note.lifeElapsed))
+            ? Number(note.lifeElapsed)
+            : max(0, Date.now() - (Number(note.created) || Date.now())),
           hatching: Boolean(note.hatching),
           hatchAt: Number(note.hatchAt) || 0,
+          hatchElapsed: Number.isFinite(Number(note.hatchElapsed))
+            ? Number(note.hatchElapsed)
+            : note.hatching
+              ? max(0, Date.now() - (Number(note.hatchAt) || Date.now()))
+              : 0,
         }))
         .slice(0, SLOT_COUNT);
     }
@@ -141,6 +380,9 @@ function loadChicks() {
         .map((chick, index) => ({
           id: String(chick.id || "chick-" + index),
           bornAt: Number(chick.bornAt) || Date.now(),
+          ageElapsed: Number.isFinite(Number(chick.ageElapsed))
+            ? Number(chick.ageElapsed)
+            : max(0, Date.now() - (Number(chick.bornAt) || Date.now())),
           number: Number(chick.number) || index + 1,
           memo: {
             id: String(chick.memo.id || ""),
@@ -175,17 +417,345 @@ function loadChicks() {
   saveChicks();
 }
 
+function unlockFarmAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    console.error("이 브라우저는 Web Audio를 지원하지 않습니다.");
+    return;
+  }
+
+  if (!roosterAudioContext) {
+    roosterAudioContext = new AudioContextClass();
+  }
+
+  // resume()은 반드시 사용자 터치/클릭 이벤트 안에서 호출합니다.
+  roosterAudioContext.resume().then(() => {
+    roosterAudioUnlocked = roosterAudioContext.state === "running";
+  }).catch((error) => {
+    console.error("오디오 시작 실패:", error);
+  });
+
+  // 배경음은 수탉 수와 관계없이 첫 사용자 입력에서 별도로 시작합니다.
+  startFarmBackgroundMusic();
+
+  if (!roosterAudioLoading && !roosterAudioBuffer) {
+    roosterAudioLoading = true;
+    fetch("./rooster.mp3")
+      .then((response) => {
+        if (!response.ok) throw new Error(`rooster.mp3 로드 실패: ${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then((audioData) => roosterAudioContext.decodeAudioData(audioData))
+      .then((decodedAudio) => {
+        roosterAudioBuffer = decodedAudio;
+      })
+      .catch((error) => {
+        console.error("수탉 울음소리를 불러오지 못했습니다:", error);
+      })
+      .finally(() => {
+        roosterAudioLoading = false;
+      });
+  }
+}
+
+function startFarmBackgroundMusic() {
+  if (backgroundMusicStarted || backgroundMusicStarting) return;
+
+  if (!backgroundMusic) {
+    backgroundMusic = new Audio("../%E1%84%8C%E1%85%B5%E1%84%82%E1%85%B3%E1%86%BC%E1%84%8B%E1%85%B5%20%E1%84%84%E1%85%A5%E1%86%AF%E1%84%8B%E1%85%A5%E1%84%8C%E1%85%B5%E1%84%82%E1%85%B3%E1%86%AB%20%E1%84%87%E1%85%B3%E1%84%80%E1%85%B3%E1%86%B7.mp3");
+    backgroundMusic.loop = true;
+    backgroundMusic.preload = "auto";
+    backgroundMusic.volume = 0.35;
+  }
+
+  // 단일 Audio 요소만 사용해 중복 재생이나 겹치는 루프를 방지합니다.
+  backgroundMusicStarting = true;
+  backgroundMusic.play()
+    .then(() => {
+      backgroundMusicStarted = true;
+      backgroundMusicStarting = false;
+    })
+    .catch((error) => {
+      backgroundMusicStarting = false;
+      console.error("배경음악 재생 실패:", error);
+    });
+}
+
+function playRoosterIfReady() {
+  if (
+    !roosterAudioUnlocked ||
+    !roosterAudioBuffer ||
+    !roosterAudioContext ||
+    roosterAudioContext.state !== "running" ||
+    roosterSourceNode
+  ) {
+    return false;
+  }
+
+  roosterSourceNode = roosterAudioContext.createBufferSource();
+  roosterSourceNode.buffer = roosterAudioBuffer;
+  roosterSourceNode.connect(roosterAudioContext.destination);
+  roosterSourceNode.onended = () => {
+    roosterSourceNode = null;
+  };
+  roosterSourceNode.start();
+  lastRoosterCallAt = millis();
+  return true;
+}
+
+function updateRoosterCalls() {
+  // 밤(슬라이더 0.7 이상)에는 울지 않고, 진행 중인 울음도 멈춥니다.
+  if (getIsNight()) {
+    roosterCallTimerStarted = false;
+    if (roosterSourceNode) roosterSourceNode.stop();
+    return;
+  }
+
+  const adultRoosters = chicks.filter(
+    (chick) => !chick.leaving && (chick.ageElapsed || 0) >= 150 * 1000,
+  ).length;
+
+  if (adultRoosters < 2) {
+    roosterCallTimerStarted = false;
+    return;
+  }
+
+  // 낮은 15초 간격, 해질녘(슬라이더 0.5부터)은 30초 간격입니다.
+  const callInterval = timeOfDay >= 0.5 ? 30000 : 15000;
+
+  if (!roosterCallTimerStarted) {
+    roosterCallTimerStarted = true;
+    // 조건을 처음 만족하면 바로 한 번 울고, 이후 시간대별 간격으로 반복합니다.
+    lastRoosterCallAt = millis() - callInterval;
+  }
+
+  if (millis() - lastRoosterCallAt >= callInterval) {
+    playRoosterIfReady();
+  }
+}
+
+function getMovementRate() {
+  if (timeOfDay <= 0.5) return lerp(1, 0.45, timeOfDay * 2);
+  return lerp(0.45, 0.15, (timeOfDay - 0.5) * 2);
+}
+
+function getGrowthRate() {
+  if (timeOfDay >= 0.7) return 0;
+  if (timeOfDay <= 0.5) return lerp(1, 0.3, timeOfDay * 2);
+  return lerp(0.3, 0, (timeOfDay - 0.5) / 0.2);
+}
+
+function getEggLifeRate() {
+  if (timeOfDay >= 0.7) return 0;
+  if (timeOfDay <= 0.5) return lerp(1, 0.3, timeOfDay * 2);
+  return lerp(0.3, 0, (timeOfDay - 0.5) / 0.2);
+}
+
+function getHatchRate() {
+  if (timeOfDay >= 0.7) return 0.5;
+  if (timeOfDay <= 0.5) return lerp(1, 0.5, timeOfDay * 2);
+  return lerp(0.5, 0, (timeOfDay - 0.5) / 0.2);
+}
+
+function getIsNight() {
+  return timeOfDay >= 0.7;
+}
+
+function timeSliderBounds() {
+  return { left: width * 0.57, right: width * 0.94, y: 30 };
+}
+
+function drawTimeOfDayTint() {
+  if (timeOfDay < 0.52) return;
+  const darkness = map(timeOfDay, 0.52, 1, 0, 105, true);
+  noStroke();
+  fill(20, 31, 58, darkness);
+  rect(0, 0, width, height);
+}
+
+function drawTimeOfDaySlider() {
+  const bounds = timeSliderBounds();
+  const mid = (bounds.left + bounds.right) / 2;
+  const handleX = lerp(bounds.left, bounds.right, timeOfDay);
+
+  push();
+  noStroke();
+  fill(40, 48, 57, 150);
+  rect(bounds.left - 30, 4, bounds.right - bounds.left + 60, 54, 18);
+
+  stroke("#f7ebcb");
+  strokeWeight(4);
+  line(bounds.left, bounds.y, bounds.right, bounds.y);
+  noStroke();
+  fill("#f7ebcb");
+  circle(bounds.left, bounds.y, 7);
+  circle(mid, bounds.y, 7);
+  circle(bounds.right, bounds.y, 7);
+
+  // 낮: 해 / 해질녘: 지는 해 / 밤: 초승달
+  const iconY = bounds.y - 13;
+  noStroke();
+  fill("#ffd979");
+  circle(bounds.left, iconY, 17);
+
+  fill("#f4b273");
+  arc(mid, iconY + 3, 19, 19, PI, TWO_PI, CHORD);
+  stroke("#f4b273");
+  strokeWeight(2);
+  line(mid - 11, iconY + 4, mid + 11, iconY + 4);
+
+  noStroke();
+  fill("#f7ebcb");
+  circle(bounds.right, iconY, 18);
+  fill(40, 48, 57, 255);
+  circle(bounds.right + 6, iconY - 5, 16);
+
+  fill("#fff8e8");
+  stroke("#70462f");
+  strokeWeight(2);
+  circle(handleX, bounds.y, 22);
+
+  noStroke();
+  fill("#fff8e8");
+  textAlign(CENTER, CENTER);
+  textSize(11);
+  text("낮", bounds.left, 47);
+  text("해질녘", mid, 47);
+  text("밤", bounds.right, 47);
+  pop();
+}
+
+function timeSliderHit(mx, my) {
+  const bounds = timeSliderBounds();
+  return mx >= bounds.left - 28 && mx <= bounds.right + 28 &&
+    my >= bounds.y - 26 && my <= bounds.y + 26;
+}
+
+function skyTimeDragHit(mx, my) {
+  // 상단 시간 슬라이더 바로 아래부터 울타리 윗선까지의 하늘에서 시작합니다.
+  const topOfSkyDrag = timeSliderBounds().y + 27;
+  const bottomOfSkyDrag = BASE_HEIGHT * 0.43;
+  return my >= topOfSkyDrag && my <= bottomOfSkyDrag;
+}
+
+function setTimeOfDayFromPointer() {
+  const bounds = timeSliderBounds();
+  timeOfDay = constrain(map(mouseX, bounds.left, bounds.right, 0, 1), 0, 1);
+}
+
+function setTimeOfDayFromSkyPointer() {
+  // 누른 위치가 아니라, 누른 뒤 움직인 거리만큼 시간대를 바꿉니다.
+  // 아래로 끌면 밤 쪽으로, 위로 끌면 낮 쪽으로 천천히 이동합니다.
+  const verticalTravelForFullDay = BASE_HEIGHT * 0.47;
+  const timeChange = (mouseY - skyDragStartY) / verticalTravelForFullDay;
+  timeOfDay = constrain(skyDragStartTime + timeChange, 0, 1);
+}
+
+function createFarmCloud(x) {
+  const puffCount = floor(random(4, 8));
+  const puffs = [];
+
+  for (let i = 0; i < puffCount; i++) {
+    const spread = puffCount <= 1 ? 0 : map(i, 0, puffCount - 1, -0.36, 0.36);
+    puffs.push({
+      x: spread + random(-0.09, 0.09),
+      y: random(-0.18, 0.08),
+      w: random(0.25, 0.43),
+      h: random(0.38, 0.72),
+    });
+  }
+
+  return {
+    x,
+    y: random(92, BASE_HEIGHT * 0.37),
+    w: random(95, 205),
+    h: random(32, 66),
+    speed: random(12, 27),
+    floatAmplitude: random(2, 8),
+    floatSpeed: random(0.55, 1.2),
+    phase: random(TWO_PI),
+    puffs,
+  };
+}
+
+function initializeFarmClouds() {
+  farmClouds = [];
+  const cloudCount = 5;
+  for (let i = 0; i < cloudCount; i++) {
+    farmClouds.push(createFarmCloud(random(-width * 0.12, width * 1.05)));
+  }
+}
+
+function updateFarmClouds(dt) {
+  for (let i = 0; i < farmClouds.length; i++) {
+    const cloud = farmClouds[i];
+    cloud.x -= cloud.speed * dt;
+
+    // 구름이 왼쪽 끝을 완전히 지나면 오른쪽에서 새 모양으로 나타납니다.
+    if (cloud.x + cloud.w * 0.55 < 0) {
+      farmClouds[i] = createFarmCloud(width + random(35, 190));
+    }
+  }
+}
+
+function drawFarmClouds(opacity, tint) {
+  const cloudColor = color(tint);
+  for (const cloud of farmClouds) {
+    const y = cloud.y + sin(millis() * 0.001 * cloud.floatSpeed + cloud.phase) * cloud.floatAmplitude;
+    push();
+    noStroke();
+
+    fill(75, 120, 145, opacity * 0.13);
+    ellipse(cloud.x, y + cloud.h * 0.2, cloud.w * 0.9, cloud.h * 0.42);
+
+    fill(red(cloudColor), green(cloudColor), blue(cloudColor), opacity);
+    ellipse(cloud.x, y + cloud.h * 0.12, cloud.w * 0.82, cloud.h * 0.48);
+    for (const puff of cloud.puffs) {
+      ellipse(
+        cloud.x + puff.x * cloud.w,
+        y + puff.y * cloud.h,
+        puff.w * cloud.w,
+        puff.h * cloud.h,
+      );
+    }
+
+    fill(255, 255, 255, opacity * 0.2);
+    ellipse(cloud.x - cloud.w * 0.08, y - cloud.h * 0.22, cloud.w * 0.36, cloud.h * 0.14);
+    pop();
+  }
+}
+
 function drawSky() {
+  const dayColor = color("#8ed8f2");
+  const sunsetColor = color("#f2a477");
+  const nightColor = color("#243653");
+  let skyColor;
+
+  if (timeOfDay <= 0.5) {
+    skyColor = lerpColor(dayColor, sunsetColor, timeOfDay * 2);
+  } else {
+    skyColor = lerpColor(sunsetColor, nightColor, (timeOfDay - 0.5) * 2);
+  }
+  background(skyColor);
   noStroke();
 
-  fill("#bdeafa");
-  ellipse(width * 0.18, BASE_HEIGHT * 0.15, 100, 42);
-  ellipse(width * 0.23, BASE_HEIGHT * 0.15, 75, 38);
-  ellipse(width * 0.78, BASE_HEIGHT * 0.19, 130, 48);
-  ellipse(width * 0.84, BASE_HEIGHT * 0.18, 90, 40);
+  const cloudColor = lerpColor(color("#d8f4ff"), color("#68758e"), timeOfDay);
+  const cloudAlpha = 190 - timeOfDay * 95;
+  drawFarmClouds(cloudAlpha, cloudColor);
 
+  // 해는 지평선 아래까지 내려가며, 앞에서 그려지는 들판에 가려져 사라집니다.
+  const sunY = lerp(BASE_HEIGHT * 0.11, BASE_HEIGHT * 0.58, timeOfDay);
   fill("#ffd979");
-  ellipse(width * 0.86, BASE_HEIGHT * 0.11, 70, 70);
+  ellipse(width * 0.86, sunY, 70, 70);
+
+  // 달은 해질녘이 시작된 뒤 화면 위에서 아래로 내려와 자리를 잡습니다.
+  const moonProgress = constrain((timeOfDay - 0.58) / 0.42, 0, 1);
+  const moonY = lerp(-32, BASE_HEIGHT * 0.11, moonProgress);
+  const moonAlpha = 255 * constrain(moonProgress * 2.2, 0, 1);
+  fill(245, 240, 214, moonAlpha);
+  circle(width * 0.86, moonY, 48);
+  fill(red(skyColor), green(skyColor), blue(skyColor), moonAlpha);
+  circle(width * 0.86 + 15, moonY - 7, 42);
 }
 
 function drawField() {
@@ -426,6 +996,7 @@ function drawEgg(x, y, eggW, eggH, note, eggNumber) {
   // 알 윗부분에 고정된 생성 순번 표시
   fill("#4a392a");
   textAlign(CENTER, CENTER);
+  textFont("MemoFont");
   textSize(max(8, eggW * 0.18));
   text(String(eggNumber), 0, -eggH * 0.32);
 
@@ -453,39 +1024,62 @@ function drawEgg(x, y, eggW, eggH, note, eggNumber) {
   pop();
 }
 
-function drawChicks() {
-  const dt = min(deltaTime, 40) / 1000;
+function drawChicks(dt) {
   const margin = max(18, min(width, BASE_HEIGHT) * 0.04);
   const minX = margin;
   const maxX = width - margin;
   const carton = cartonLayout();
   const escapedIds = [];
 
+  const movementRate = getMovementRate();
+  const growthRate = getGrowthRate();
+
   for (const chick of chicks) {
+    chick.ageElapsed = (chick.ageElapsed || 0) + dt * 1000 * growthRate;
     chick.size = getChickSize(chick);
 
     if (chick.leaving) {
       const targetX = width * 0.88;
       const targetY = BASE_HEIGHT * 0.49;
       const dx = targetX - chick.x;
-      const dy = targetY - chick.y;
-      const remainingDistance = abs(dx) + abs(dy);
-      const step = width * 0.22 * dt;
-      const startingDistance = chick.exitStartDistance || max(1, remainingDistance);
+      const step = width * 0.22 * dt * movementRate;
+      const gateBottomY = BASE_HEIGHT * (0.43 + 0.12);
+      const gateEntryY = gateBottomY + chick.size / 2;
 
-      // 먼저 풀밭을 가로질러 열린 문 앞까지 간 다음, 문을 통과합니다.
+      // 문 가까이에서 경로를 부드럽게 꺾고, 문턱을 넘으며 천천히 작아집니다.
       if (abs(dx) > 1) {
-        const moveX = min(abs(dx), step);
+        const turnRange = width * 0.07;
+        const turnAmount = constrain(1 - abs(dx) / turnRange, 0, 1);
+        const smoothTurn = turnAmount * turnAmount * (3 - 2 * turnAmount);
+        const horizontalFactor = max(0.12, sqrt(1 - smoothTurn * smoothTurn));
+        const moveX = min(abs(dx), step * horizontalFactor);
+        const distanceToEntry = max(0, chick.y - gateEntryY);
+        const moveY = min(distanceToEntry, step * smoothTurn);
+
         chick.x += Math.sign(dx) * moveX;
+        chick.y -= moveY;
         chick.direction = dx >= 0 ? 1 : -1;
-      } else if (abs(dy) > step) {
-        chick.y += Math.sign(dy) * step;
+      } else if (chick.y > gateEntryY) {
+        chick.y -= min(chick.y - gateEntryY, step);
       } else {
-        escapedIds.push(chick.id);
-        continue;
+        const slowStep = width * 0.08 * dt * movementRate;
+        const remainingInsideDistance = abs(targetY - chick.y);
+        if (remainingInsideDistance <= slowStep) {
+          escapedIds.push(chick.id);
+          continue;
+        }
+
+        chick.y -= slowStep;
+        const shrinkProgress = constrain(
+          (gateEntryY - chick.y) / (gateEntryY - targetY),
+          0,
+          1,
+        );
+        const smoothShrink =
+          shrinkProgress * shrinkProgress * (3 - 2 * shrinkProgress);
+        chick.size *= lerp(1, 0.06, smoothShrink);
       }
 
-      chick.size *= constrain(remainingDistance / startingDistance, 0.06, 1);
       drawChick(chick);
       continue;
     }
@@ -494,7 +1088,7 @@ function drawChicks() {
     const yBounds = chickYBounds(chick, carton);
 
     // 병아리마다 고유 속도로 좌우 이동합니다.
-    chick.x += chick.direction * chick.speed * dt;
+    chick.x += chick.direction * chick.speed * dt * movementRate;
 
     if (chick.x <= minX + half) {
       chick.x = minX + half;
@@ -505,7 +1099,7 @@ function drawChicks() {
     }
 
     // 초록 평원 안에서 천천히 위아래로 움직입니다.
-    chick.y += chick.verticalDirection * chick.verticalSpeed * dt;
+    chick.y += chick.verticalDirection * chick.verticalSpeed * dt * movementRate;
 
     if (chick.y <= yBounds.min) {
       chick.y = yBounds.min;
@@ -554,91 +1148,59 @@ function drawChicksInFrontOfLegBottoms() {
 
 function drawChick(chick) {
   const s = chick.size;
+  const density = pixelDensity();
   const bob = sin(millis() * 0.008 + chick.phase) * s * 0.025;
-  const ageMs = Date.now() - (chick.bornAt || Date.now());
+  // 움직이는 투명 PNG가 소수점 좌표에서 매 프레임 다르게 보간되며 떨리는 현상을 줄입니다.
+  const drawX = Math.round(chick.x * density) / density;
+  const drawY = Math.round((chick.y + bob) * density) / density;
+  const ageMs = chick.ageElapsed || 0;
   const hasComb = ageMs >= 90 * 1000;
   const isChicken = ageMs >= 150 * 1000;
-  const isAngry = ageMs >= 180 * 1000;
 
   push();
-  translate(chick.x, chick.y + bob);
-
-  // 진행 방향에 따라 병아리 얼굴을 좌우로 돌립니다.
+  translate(drawX, drawY);
   scale(chick.direction, 1);
 
-  noStroke();
+  const growthImage = isChicken
+    ? adultChickenImage
+    : hasComb
+      ? middleChickenImage
+      : chickImage;
 
-  // 성체가 되면 몸통과 날개 색을 바꿔 닭처럼 보이게 합니다.
-  if (isChicken) {
-    // 꼬리 깃털
-    fill("#e6c56c");
-    triangle(-s * 0.28, -s * 0.1, -s * 0.65, -s * 0.28, -s * 0.52, s * 0.08);
-  }
+  // preload()가 불러온 p5.Image는 complete/naturalWidth가 아니라 width/height를 씁니다.
+  if (growthImage && growthImage.width > 0 && growthImage.height > 0) {
+    let sx = 0;
+    let sy = 0;
+    let sw = growthImage.width;
+    let sh = growthImage.height;
 
-  fill(isChicken ? "#f3dfb2" : "#ffd33d");
-  ellipse(0, 0, s, s * 0.86);
-
-  fill(isChicken ? "#e5c98e" : "#ffd33d");
-  ellipse(-s * 0.3, s * 0.06, s * 0.34, s * 0.42);
-  // 태어난 지 1분 30초가 지나면 벼슬이 생깁니다.
-  if (hasComb) {
-    fill("#d94b3d");
-    ellipse(-s * 0.1, -s * 0.43, s * 0.13, s * 0.15);
-    ellipse(0, -s * 0.47, s * 0.16, s * 0.19);
-    ellipse(s * 0.1, -s * 0.43, s * 0.13, s * 0.15);
-  }
-  // 눈
-  if (isAngry) {
-    // 원래 까만 눈을 반 타원으로 자르고 살짝 기울이며, 시간이 지나며 붉어집니다.
-    fill("#30271f");
-    noStroke();
-
-    const angryEyeWidth = max(3, s * 0.07);
-    const angryEyeHeight = max(3, s * 0.08);
-
-    for (const side of [-1, 1]) {
-      push();
-      translate(
-        side * s * 0.15,
-        -s * 0.12 - angryEyeHeight * 0.3,
-      );
-      rotate(-side * 0.22);
-      arc(
-        0,
-        0,
-        angryEyeWidth,
-        angryEyeHeight * 2,
-        0,
-        PI,
-        CHORD,
-      );
-      pop();
+    if (!isChicken && hasComb) {
+      sx = 550;
+      sy = 1300;
+      sw = 1400;
+      sh = 1500;
+    } else if (!isChicken) {
+      sx = 550;
+      sy = 1600;
+      sw = 1180;
+      sh = 1200;
     }
-  } else {
-    fill("#30271f");
-    ellipse(-s * 0.14, -s * 0.12, max(3, s * 0.07), max(3, s * 0.08));
-    ellipse(s * 0.16, -s * 0.12, max(3, s * 0.07), max(3, s * 0.08));
+
+    const rawHeight = isChicken ? s * (sh / sw) : s * 0.93;
+    const rawWidth = rawHeight * (sw / sh);
+    const drawHeight = Math.round(rawHeight * density) / density;
+    const drawWidth = Math.round(rawWidth * density) / density;
+    imageMode(CENTER);
+    image(growthImage, 0, 0, drawWidth, drawHeight, sx, sy, sw, sh);
+
   }
 
-  // 부리
-  fill("#f18a27");
-  triangle(0, -s * 0.03, s * 0.18, s * 0.06, 0, s * 0.14);
-  // 태어난 지 2분 30초가 되면 닭의 볏살이 생깁니다.
-  if (isChicken) {
-    fill("#d94b3d");
-    ellipse(s * 0.06, s * 0.2, s * 0.1, s * 0.15);
-  }
-  // 발
-  stroke("#e8822a");
-  strokeWeight(max(2, s * 0.035));
-  line(-s * 0.15, s * 0.32, -s * 0.2, s * 0.43);
-  line(s * 0.15, s * 0.32, s * 0.2, s * 0.43);
-
-  // 병아리 몸통에 부화한 알 번호 표시
+  // 몸통 위 번호는 이미지 방향과 상관없이 읽히도록 다시 좌우 반전합니다.
   scale(chick.direction, 1);
   noStroke();
   fill("#4a392a");
   textAlign(CENTER, CENTER);
+  textFont("MemoFont");
   const baseChickSize = min(width * 0.0625, BASE_HEIGHT * 0.10125) * 0.97;
   const numberGrowth = min(s / baseChickSize, 1.3);
   textSize(max(6, baseChickSize * 0.24 * numberGrowth));
@@ -654,6 +1216,7 @@ function addChickFromNote(note) {
   const chick = {
     id: "chick-" + note.id,
     bornAt: Date.now(),
+    ageElapsed: 0,
     number: note.number,
     memo: {
       id: note.id,
@@ -709,15 +1272,20 @@ function chickYBounds(chick, box) {
 
 function getChickSize(chick) {
   const baseSize = min(width * 0.0625, BASE_HEIGHT * 0.10125) * 0.97;
-  const ageMs = Date.now() - (chick.bornAt || Date.now());
+  const ageMs = chick.ageElapsed || 0;
   const growthProgress = constrain(ageMs / (150 * 1000), 0, 1);
 
   // 2분 30초 동안 부드럽게 커져서 원래 병아리의 1.4배가 됩니다.
   return baseSize * lerp(1, 1.4, growthProgress);
 }
 
-function updateNotes() {
+function updateNotes(dt) {
   const now = Date.now();
+  const eggLifeRate = getEggLifeRate();
+
+  for (const note of notes) {
+    note.lifeElapsed = (note.lifeElapsed || 0) + dt * 1000 * eggLifeRate;
+  }
 
   if (notes.length > 0) {
     // 작성 시간이 가장 오래된 알부터 부화시킵니다.
@@ -731,13 +1299,25 @@ function updateNotes() {
 
     const oldest = notes[oldestIndex];
 
-    if (!oldest.hatching && now - oldest.created >= NOTE_LIFE) {
+    const isNight = getIsNight();
+    const naturalHatchReady = !isNight && oldest.lifeElapsed >= NOTE_LIFE;
+    const fullTrayNightHatchReady = isNight && notes.length >= SLOT_COUNT;
+
+    if (!oldest.hatching && (naturalHatchReady || fullTrayNightHatchReady)) {
       oldest.hatching = true;
       oldest.hatchAt = now;
+      oldest.hatchElapsed = 0;
       saveNotes();
     }
 
-    if (oldest.hatching && now - oldest.hatchAt >= HATCH_TIME) {
+    if (oldest.hatching) {
+      const canHatchNow = !isNight || notes.length >= SLOT_COUNT;
+      if (canHatchNow) {
+        oldest.hatchElapsed = (oldest.hatchElapsed || 0) + dt * 1000 * getHatchRate();
+      }
+    }
+
+    if (oldest.hatching && oldest.hatchElapsed >= HATCH_TIME) {
       addChickFromNote(oldest);
       notes.splice(oldestIndex, 1);
 
@@ -788,6 +1368,7 @@ function buildUI() {
   const heading = createDiv("농장 비밀 노트");
   heading.parent(editor);
   heading.style("font-size", "20px");
+  heading.style("font-family", '"FarmTitleFont", sans-serif');
   heading.style("font-weight", "bold");
   heading.style("color", "#59371f");
   heading.style("margin-bottom", "12px");
@@ -812,7 +1393,8 @@ function buildUI() {
   bodyInput.style("margin-top", "12px");
   bodyInput.style("padding", "12px");
   bodyInput.style("resize", "none");
-  bodyInput.style("font-size", "18px");
+  bodyInput.style("font-size", "20px");
+  bodyInput.style("font-family", '"MemoFont", sans-serif');
   bodyInput.style("line-height", "1.6");
   bodyInput.style("color", "#38291f");
   bodyInput.style("background", "#ffdda0");
@@ -866,6 +1448,7 @@ function buildUI() {
 }
 
 function styleInput(element) {
+  element.style("font-family", '"MemoFont", sans-serif');
   element.style("box-sizing", "border-box");
   element.style("width", "100%");
   element.style("padding", "11px");
@@ -876,6 +1459,7 @@ function styleInput(element) {
 }
 
 function styleButton(element, background, color) {
+  element.style("font-family", '"FarmUIFont", sans-serif');
   element.style("padding", "11px 18px");
   element.style("font-size", "16px");
   element.style("border", "0");
@@ -978,6 +1562,8 @@ function saveEditor() {
       created: Date.now(),
       hatching: false,
       hatchAt: 0,
+      lifeElapsed: 0,
+      hatchElapsed: 0,
     };
     nextEggNumber++;
     localStorage.setItem(EGG_NUMBER_KEY, String(nextEggNumber));
@@ -998,6 +1584,7 @@ function saveEditor() {
       pendingTargetId = notes[oldestIndex].id;
       notes[oldestIndex].hatching = true;
       notes[oldestIndex].hatchAt = Date.now();
+      notes[oldestIndex].hatchElapsed = 0;
     }
   }
 
@@ -1018,6 +1605,7 @@ function saveChicks() {
     const saved = chicks.map((chick) => ({
       id: chick.id,
       bornAt: chick.bornAt,
+      ageElapsed: chick.ageElapsed || 0,
       number: chick.number,
       memo: chick.memo,
       xRatio: chick.x / width,
@@ -1088,6 +1676,8 @@ function resetFarm() {
   localStorage.removeItem(STORE_KEY);
   localStorage.removeItem(CHICK_STORE_KEY);
   localStorage.removeItem(EGG_NUMBER_KEY);
+  localStorage.removeItem(TIME_OF_DAY_KEY);
+  timeOfDay = 0;
 
   if (editorIsOpen) {
     closeEditor();
@@ -1095,7 +1685,37 @@ function resetFarm() {
 }
 
 function mousePressed() {
+  unlockFarmAudio();
+
+  if (titleScreenActive) {
+    if (titleTransitionStartedAt === null) {
+      const button = titleStartButtonBounds();
+      if (
+        mouseX >= button.x &&
+        mouseX <= button.x + button.w &&
+        mouseY >= button.y &&
+        mouseY <= button.y + button.h
+      ) {
+        titleTransitionStartedAt = millis();
+      }
+    }
+    return;
+  }
+
   if (editorIsOpen) {
+    return;
+  }
+
+  if (timeSliderHit(mouseX, mouseY)) {
+    timeSliderDragging = true;
+    setTimeOfDayFromPointer();
+    return;
+  }
+
+  if (skyTimeDragHit(mouseX, mouseY)) {
+    skyTimeDragging = true;
+    skyDragStartY = mouseY;
+    skyDragStartTime = timeOfDay;
     return;
   }
 
@@ -1129,8 +1749,6 @@ function mousePressed() {
     if (dist(mouseX, mouseY, chick.x, chick.y) < hitSize) {
       if (gateExitMode && gateOpen) {
         chick.leaving = true;
-        chick.exitStartDistance =
-          abs(width * 0.88 - chick.x) + abs(BASE_HEIGHT * 0.49 - chick.y);
       } else {
         openEditor(chick.memo, "chick");
       }
@@ -1196,4 +1814,21 @@ function mousePressed() {
 //   keepChicksInsideFence();}
 function windowResized() {
   // 창 크기가 바뀌어도 캔버스 크기는 1024 × 576으로 유지합니다.
+}
+
+
+function mouseDragged() {
+  if (skyTimeDragging) {
+    setTimeOfDayFromSkyPointer();
+  } else if (timeSliderDragging) {
+    setTimeOfDayFromPointer();
+  }
+}
+
+function mouseReleased() {
+  if (timeSliderDragging || skyTimeDragging) {
+    localStorage.setItem(TIME_OF_DAY_KEY, String(timeOfDay));
+  }
+  timeSliderDragging = false;
+  skyTimeDragging = false;
 }
