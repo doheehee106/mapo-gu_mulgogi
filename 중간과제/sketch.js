@@ -537,9 +537,7 @@ function startFarmBackgroundMusic() {
   if (backgroundMusicStarted || backgroundMusicStarting) return;
 
   if (!backgroundMusic) {
-    backgroundMusic = new Audio(
-      "../%E1%84%8C%E1%85%B5%E1%84%82%E1%85%B3%E1%86%BC%E1%84%8B%E1%85%B5%20%E1%84%84%E1%85%A5%E1%86%AF%E1%84%8B%E1%85%A5%E1%84%8C%E1%85%B5%E1%84%82%E1%85%B3%E1%86%AB%20%E1%84%87%E1%85%B3%E1%84%80%E1%85%B3%E1%86%B7.mp3",
-    );
+    backgroundMusic = new Audio("../farm-bgm.mp3");
     backgroundMusic.loop = true;
     backgroundMusic.preload = "auto";
     backgroundMusic.volume = 0.35;
